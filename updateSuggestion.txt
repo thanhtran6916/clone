@@ -1,0 +1,16 @@
+public Suggestion updateSuggestion(Suggestion suggestion, SuggestionDTO suggestionDTO, SgtState nextState) {
+    // update lai ma DX neu ma tram dx thay doi
+    String suggestionCode = getSuggestCode(suggestionDTO);
+    if (!suggestionCode.isEmpty()) {
+      suggestion.setSuggestCode(suggestionCode);
+
+    }
+    // update trang thai
+    suggestion.setSuggestStatus(nextState.getSuggestionStatus());
+    // update depId
+    suggestion.setDeptId(getDeptIdOfSuggetion(suggestionDTO));
+    //
+    Date sysdate = new Date();
+    suggestion.setUpdateTime(sysdate);
+    return suggestionRepository.save(suggestion);
+  }
