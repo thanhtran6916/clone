@@ -1,0 +1,84 @@
+@SneakyThrows
+  public SuggestionDTO ucUpdateLocation(SuggestionDTO suggestionDTO) {
+    //
+    String username = userService.getCurrentUser().getUsername();
+
+    Suggestion suggestion = suggestionHelperService.getValidSuggestion(suggestionDTO);
+    //
+    SuggestionNewSiteDTO suggestionNewSiteDTO = suggestionDTO.getSuggestionNewSiteDTO();
+    suggestionNewSiteDTO = suggestionNewSiteHelperService.format(suggestionNewSiteDTO, suggestionDTO);
+
+    // set lai thong tin vao DTO => todo: chua hieu nghiep vu
+    suggestionDTO.setSuggestType(suggestion.getSuggestType());
+    suggestionDTO.setDeptId(suggestion.getDeptId());
+    suggestionNewSiteDTO.setHighAntenPillarType(suggestionDTO.getHighAntenPillarType());
+
+
+    //
+    SuggestionNewSite oldLocation = suggestionNewSiteService.findOne(suggestion.getSuggestId(), Constants.ROW_STATUS.ACTIVE);
+
+    // todo validate Vi tri DX
+    Map<String, String> map = newSiteLocationValidator.validateUpdate(suggestionNewSiteDTO, suggestion, oldLocation);
+    if (!ObjectHandler.isNullOrEmpty(map)) {
+      throw new MultiValidateException(map);
+    }
+
+    // validate vi tri so voi vi tri sector
+    List<SuggestionCallOff> suggestionCallOffs = callOffHelperService.getCurrentSuggestionCallOff(suggestion);
+    String bug = sectorHelperService.validateLocationAgainSectorPoint(suggestionCallOffs, org.apache.commons.lang3.math.NumberUtils.toDouble(suggestionNewSiteDTO.getLng()), org.apache.commons.lang3.math.NumberUtils.toDouble(suggestionNewSiteDTO.getLat()));
+    if (!Utils.isNullOrEmpty(bug)) {
+      suggestionNewSiteDTO.setIsUpdateLatLng(true);
+      suggestionNewSiteDTO.setMessUpdateLatLng(bug);
+      return locationHelperService.setReturnViewLocation(suggestionDTO, suggestion, suggestionNewSiteDTO);
+    }
+
+
+    // thay doi vi location hoac khoang cach giua 2 vi tri > 100m
+
+    SuggestionNewSiteDTO oldLocationDTO = suggestionNewSiteService.get(suggestion.getSuggestId(), Constants.ROW_STATUS.ACTIVE);
+    SuggestionNewSiteDTO newLocationDTO = suggestionDTO.getSuggestionNewSiteDTO();
+    DiffResult diffs = oldLocationDTO.diff(newLocationDTO);
+    if (!diffs.getDiffs().isEmpty()) {
+      suggestionLogService.saveDiffLog(SuggestionNewSiteDTO.class.getName(), suggestion.getSuggestId(), diffs, username);
+    }
+    //
+
+    boolean isChangeSolution = !oldLocationDTO.getLocationId().equals(newLocationDTO.getLocationId());
+    if (!isChangeSolution) {
+      Point newPoint = new Point(Double.valueOf(newLocationDTO.getLng()), Double.valueOf(newLocationDTO.getLat()));
+      Point oldPoint = new Point(Double.valueOf(oldLocationDTO.getLng()), Double.valueOf(oldLocationDTO.getLat()));
+      double distance = LocationHandler.distanceBetweenTwoPoints(oldPoint, newPoint);
+      boolean distanceCompare = BigDecimal.valueOf(distance).compareTo(BigDecimal.valueOf(-1f)) != 0;
+      isChangeSolution = distanceCompare && Math.abs(distance) >= Constants.DEFLECTION_DISTANCE_STATION.MIN;
+    }
+
+    String actionCode = NewSiteSuggestionState.Action.ACTION_UPDATE_AND_NOT_CHANGE_LOCATION;
+    if (isChangeSolution) {
+      actionCode = NewSiteSuggestionState.Action.ACTION_UPDATE_AND_CHANGE_LOCATION;
+    }
+
+    //  update suggestion
+    int preState = suggestion.getSuggestStatus();
+    SgtState nextState = newSiteSuggestionState.getNextState(suggestion, actionCode);
+    suggestion = suggestionHelperService.updateSuggestion(suggestion, suggestionDTO, nextState);
+
+
+    // update thong tin dx sau khi chuyen trang thai
+    nextState.updateSuggestion(preState, actionCode, suggestion);
+
+    // luu thong tin Vi tri - SuggestionNewSite
+    SuggestionNewSite suggestionNewSite = locationHelperService.save(oldLocation, suggestionNewSiteDTO);
+
+    // cap nhat vi tri tram neu co thay doi vi tri
+    infraStationHelperService.updateStationLocationWhenUpdateLocation(suggestion, suggestionNewSite);
+
+    // ghi log
+    locationHelperService.writeLogUpdateSuggestionNewSite(suggestion, oldLocation, suggestionNewSite);
+
+    // cap nhat device code call off trans
+    callOffTransHelperService.updateDeviceCodeCallOfTrans(suggestionNewSiteDTO.getStationCodeSuggest(), suggestionCallOffs);
+
+    // set du lieu tra ve view
+    return locationHelperService.setReturnViewLocation(suggestionDTO, suggestion, suggestionNewSiteDTO);
+
+  }
